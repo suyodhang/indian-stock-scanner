@@ -922,14 +922,14 @@ def create_heatmap(data, title=""):
 # ============================================================
 
 @st.cache_data(ttl=300)  # 5 min cache
-def load_stock_data(symbol, period="6mo"):
+def load_stock_data(symbol, period="6mo", exchange="NSE"):
     """Load and cache stock data"""
     try:
         from data_collection.yahoo_fetcher import YahooFinanceFetcher
         from analysis.technical_indicators import TechnicalIndicators
         
-        fetcher = YahooFinanceFetcher(exchange="NSE")
-        df = fetcher.get_historical_data(symbol, period=period)
+        fetcher = YahooFinanceFetcher(exchange=exchange)
+        df = fetcher.get_historical_data(symbol, period=period, exchange=exchange)
         
         if not df.empty:
             ti = TechnicalIndicators()
@@ -939,6 +939,29 @@ def load_stock_data(symbol, period="6mo"):
     except Exception as e:
         st.error(f"Error loading {symbol}: {e}")
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def load_ai_symbol_universes() -> Dict[str, List[str]]:
+    """Load symbol lists for AI prediction selector."""
+    universes: Dict[str, List[str]] = {}
+    try:
+        from config.stock_universe import NIFTY_50, NIFTY_NEXT_50
+        universes["NSE - NIFTY 50"] = sorted(list(dict.fromkeys(NIFTY_50)))
+        universes["NSE - NIFTY Next 50"] = sorted(list(dict.fromkeys([s for s in NIFTY_NEXT_50 if s])))
+    except Exception:
+        universes["NSE - NIFTY 50"] = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
+        universes["NSE - NIFTY Next 50"] = ["BANKBARODA", "BEL", "CANBK", "DLF", "IOC", "IRCTC"]
+
+    try:
+        from data_collection.bse_fetcher import BSE_STOCK_CODES
+        bse_symbols = sorted(list(dict.fromkeys(BSE_STOCK_CODES.keys())))
+        universes["BSE - Top Mapped"] = bse_symbols
+    except Exception:
+        universes["BSE - Top Mapped"] = ["RELIANCE", "TCS", "INFY", "SBIN", "ITC", "LT", "MARUTI"]
+
+    universes["Custom Input"] = []
+    return universes
 
 @st.cache_data(ttl=300)
 def load_multiple_stocks(symbols, period="6mo"):
@@ -1508,16 +1531,37 @@ def page_ai_predictions():
     </div>
     """, unsafe_allow_html=True)
     
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        ai_symbol = st.text_input("Symbol for AI Analysis", value="RELIANCE")
-    with col2:
+    symbol_universes = load_ai_symbol_universes()
+
+    c1, c2, c3 = st.columns([1.4, 2.2, 1])
+    with c1:
+        universe_name = st.selectbox(
+            "Select List",
+            list(symbol_universes.keys()),
+            index=0,
+        )
+    with c2:
+        if universe_name == "Custom Input":
+            ai_symbol = st.text_input("Symbol for AI Analysis", value="RELIANCE")
+        else:
+            options = symbol_universes.get(universe_name, ["RELIANCE"])
+            default_idx = options.index("RELIANCE") if "RELIANCE" in options else 0
+            ai_symbol = st.selectbox("Choose Symbol", options, index=default_idx)
+    with c3:
         horizon = st.selectbox("Prediction Horizon", ["5 Days", "10 Days", "20 Days"])
+
+    ai_exchange = "BSE" if universe_name.startswith("BSE") else "NSE"
+    st.caption(f"Selected Universe: {universe_name} | Exchange Mode: {ai_exchange}")
     
     if st.button("Run AI Analysis", type="primary", width="stretch"):
         with st.spinner("Training AI models..."):
             try:
-                df = load_stock_data(ai_symbol.upper(), "2y")
+                symbol_clean = ai_symbol.upper().strip()
+                if not symbol_clean:
+                    st.error("Please select or enter a valid symbol.")
+                    return
+
+                df = load_stock_data(symbol_clean, "2y", exchange=ai_exchange)
                 
                 if df.empty or len(df) < 200:
                     st.error("Insufficient data for AI analysis (need at least 200 data points)")
