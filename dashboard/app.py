@@ -1028,7 +1028,13 @@ def load_market_news_feed(bucket: str, days: int = 7, max_per_topic: int = 3) ->
 
                 text = f"{title}. {article.get('description', '')}"
                 s = analyzer.analyze_text(text)
-                sentiment_score = float(s.get("positive", 0.0) - s.get("negative", 0.0))
+                impact = analyzer.estimate_news_impact(
+                    title=title,
+                    description=article.get("description", ""),
+                    source=article.get("source", ""),
+                    published_at=article.get("published_at", ""),
+                    sentiment=s,
+                )
                 sentiment_label = str(s.get("sentiment", "neutral")).upper()
 
                 rows.append({
@@ -1038,7 +1044,9 @@ def load_market_news_feed(bucket: str, days: int = 7, max_per_topic: int = 3) ->
                     "published_at": article.get("published_at", "N/A"),
                     "url": url,
                     "sentiment": sentiment_label,
-                    "score": sentiment_score,
+                    "score": float(s.get("positive", 0.0) - s.get("negative", 0.0)),
+                    "impact_score": impact.get("impact_score", 0.0),
+                    "impact_label": impact.get("impact_label", "NEUTRAL"),
                     "confidence": float(s.get("confidence", 0.0)),
                 })
 
@@ -1606,13 +1614,15 @@ def page_news_sentiment():
                         return
 
                     score = result.get('sentiment_score', 0.0)
+                    impact_score = result.get('impact_score', 0.0)
                     overall = result.get('overall_sentiment', 'neutral').upper()
+                    overall_impact = result.get('overall_impact', 'NEUTRAL')
 
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Articles", result.get('article_count', 0))
                     c2.metric("Sentiment", overall)
-                    c3.metric("Score", f"{score:+.2f}")
-                    c4.metric("Positive Ratio", f"{result.get('avg_positive', 0.0):.0%}")
+                    c3.metric("Impact", f"{impact_score:+.1f}", overall_impact)
+                    c4.metric("High Impact News", result.get('high_impact_count', 0))
 
                     fig = go.Figure(data=[
                         go.Bar(
@@ -1645,7 +1655,10 @@ def page_news_sentiment():
                         s = article.get('sentiment', {})
                         s_label = str(s.get('sentiment', 'neutral')).upper()
                         s_conf = s.get('confidence', 0.0)
-                        s_color = GREEN if s_label == 'POSITIVE' else RED if s_label == 'NEGATIVE' else YELLOW
+                        impact = article.get('impact', {})
+                        i_score = float(impact.get('impact_score', 0.0))
+                        i_label = str(impact.get('impact_label', 'NEUTRAL'))
+                        s_color = GREEN if i_score > 15 else RED if i_score < -15 else YELLOW
 
                         title = article.get('title', 'Untitled')
                         source = article.get('source', 'Unknown')
@@ -1661,6 +1674,7 @@ def page_news_sentiment():
                                 <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.82rem;color:var(--text-secondary);">
                                     <span><b>Source:</b> {source}</span>
                                     <span><b>Sentiment:</b> <span style="color:{s_color};font-weight:600;">{s_label}</span></span>
+                                    <span><b>AI Impact:</b> <span style="color:{s_color};font-weight:700;">{i_score:+.1f} ({i_label})</span></span>
                                     <span><b>Confidence:</b> {s_conf:.0%}</span>
                                     <span><b>Time:</b> {published}</span>
                                 </div>
@@ -1697,40 +1711,40 @@ def page_news_sentiment():
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Headlines", len(feed_df))
                 c2.metric("Topics", feed_df['topic'].nunique())
-                c3.metric("Avg Score", f"{feed_df['score'].mean():+.2f}")
-                c4.metric("Positive %", f"{(feed_df['sentiment'].eq('POSITIVE').mean()):.0%}")
+                c3.metric("Avg Impact", f"{feed_df['impact_score'].mean():+.1f}")
+                c4.metric("High Impact %", f"{(feed_df['impact_score'].abs().ge(35).mean()):.0%}")
 
                 topic_summary = (
                     feed_df.groupby('topic', as_index=False)
-                    .agg(avg_score=('score', 'mean'), headlines=('title', 'count'))
-                    .sort_values('avg_score', ascending=False)
+                    .agg(avg_impact=('impact_score', 'mean'), headlines=('title', 'count'))
+                    .sort_values('avg_impact', ascending=False)
                 )
 
                 fig = go.Figure()
                 fig.add_trace(go.Bar(
-                    x=topic_summary['avg_score'],
+                    x=topic_summary['avg_impact'],
                     y=topic_summary['topic'],
                     orientation='h',
-                    text=[f"{v:+.2f}" for v in topic_summary['avg_score']],
+                    text=[f"{v:+.1f}" for v in topic_summary['avg_impact']],
                     textposition='auto',
                     marker_color=[
-                        GREEN if v > 0.1 else RED if v < -0.1 else YELLOW
-                        for v in topic_summary['avg_score']
+                        GREEN if v > 15 else RED if v < -15 else YELLOW
+                        for v in topic_summary['avg_impact']
                     ],
-                    name="Topic Score",
+                    name="Topic Impact",
                 ))
                 fig.update_layout(
                     **CHART_THEME,
-                    title=f"{bucket} - Sentiment by Topic",
+                    title=f"{bucket} - AI Impact by Topic",
                     height=340,
-                    xaxis_title="Avg Sentiment Score",
+                    xaxis_title="Avg Impact Score (-100 to +100)",
                     yaxis_title="Topic",
                 )
                 st.plotly_chart(fig, width="stretch")
 
                 st.markdown("### Market Headlines")
                 for idx, row in feed_df.head(30).iterrows():
-                    s_color = GREEN if row['sentiment'] == 'POSITIVE' else RED if row['sentiment'] == 'NEGATIVE' else YELLOW
+                    s_color = GREEN if row['impact_score'] > 15 else RED if row['impact_score'] < -15 else YELLOW
                     st.markdown(
                         f"""
                         <div class="signal-card" style="border-left:4px solid {s_color};">
@@ -1743,7 +1757,7 @@ def page_news_sentiment():
                             <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.82rem;color:var(--text-secondary);">
                                 <span><b>Source:</b> {row['source']}</span>
                                 <span><b>Sentiment:</b> <span style="color:{s_color};font-weight:600;">{row['sentiment']}</span></span>
-                                <span><b>Score:</b> {row['score']:+.2f}</span>
+                                <span><b>AI Impact:</b> <span style="color:{s_color};font-weight:700;">{row['impact_score']:+.1f} ({row['impact_label']})</span></span>
                                 <span><b>Confidence:</b> {row['confidence']:.0%}</span>
                                 <span><b>Time:</b> {row['published_at']}</span>
                             </div>
@@ -1756,8 +1770,8 @@ def page_news_sentiment():
                     )
 
         st.info(
-            "Market feed basket includes NSE/BSE stocks and global themes like Gold, Silver, "
-            "GIFT Nifty, and US market indices."
+            "AI Impact Score combines sentiment + event keywords + source quality + recency weighting. "
+            "Basket includes NSE/BSE stocks and global themes like Gold, Silver, GIFT Nifty and US indices."
         )
 
 
