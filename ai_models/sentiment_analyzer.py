@@ -164,7 +164,8 @@ class SentimentAnalyzer:
         description: str = "",
         source: str = "",
         published_at: str = "",
-        sentiment: Optional[Dict] = None
+        sentiment: Optional[Dict] = None,
+        symbol: str = ""
     ) -> Dict:
         """
         Estimate directional impact of a news item.
@@ -188,9 +189,17 @@ class SentimentAnalyzer:
         # Cap cumulative event component.
         event_component = float(np.clip(event_component, -1.5, 1.5))
 
+        # Entity relevance: if target symbol is not referenced, reduce impact.
+        relevance_weight = 1.0
+        sym = str(symbol or "").upper().strip()
+        if sym:
+            text_upper = f"{title} {description}".upper()
+            if sym not in text_upper and f"{sym}.NS" not in text_upper and f"{sym}.BO" not in text_upper:
+                relevance_weight = 0.70
+
         # Blend components and apply context multipliers.
         raw = (0.55 * sentiment_component) + (0.45 * (event_component / 1.5))
-        weighted = raw * self._source_weight(source) * self._recency_weight(published_at)
+        weighted = raw * self._source_weight(source) * self._recency_weight(published_at) * relevance_weight
         impact_score = float(np.clip(weighted * 100.0, -100.0, 100.0))
 
         if impact_score >= 35:
@@ -212,6 +221,7 @@ class SentimentAnalyzer:
             'matched_events': matched[:5],
             'source_weight': self._source_weight(source),
             'recency_weight': self._recency_weight(published_at),
+            'relevance_weight': relevance_weight,
         }
     
     def _basic_sentiment(self, text: str) -> Dict:
@@ -340,6 +350,7 @@ class SentimentAnalyzer:
                 source=article.get('source', ''),
                 published_at=article.get('published_at', ''),
                 sentiment=sentiment,
+                symbol=symbol,
             )
             article['sentiment'] = sentiment
             article['impact'] = impact

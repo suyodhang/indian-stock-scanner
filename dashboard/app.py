@@ -937,23 +937,23 @@ def get_chart_links(symbol: str, exchange: str = "NSE") -> Dict[str, str]:
 # ============================================================
 
 @st.cache_data(ttl=300)  # 5 min cache
-def load_stock_data(symbol, period="6mo", exchange="NSE"):
+def load_stock_data(symbol, period="6mo", exchange="NSE", interval="1d"):
     """Load and cache stock data"""
     try:
-        df = load_stock_data_raw(symbol, period=period, exchange=exchange)
+        df = load_stock_data_raw(symbol, period=period, exchange=exchange, interval=interval)
         return df
     except Exception as e:
         st.error(f"Error loading {symbol}: {e}")
         return pd.DataFrame()
 
 
-def load_stock_data_raw(symbol, period="6mo", exchange="NSE"):
+def load_stock_data_raw(symbol, period="6mo", exchange="NSE", interval="1d"):
     """Non-Streamlit helper safe for background threads."""
     from data_collection.yahoo_fetcher import YahooFinanceFetcher
     from analysis.technical_indicators import TechnicalIndicators
 
     fetcher = YahooFinanceFetcher(exchange=exchange)
-    df = fetcher.get_historical_data(symbol, period=period, exchange=exchange)
+    df = fetcher.get_historical_data(symbol, period=period, interval=interval, exchange=exchange)
 
     if not df.empty:
         ti = TechnicalIndicators()
@@ -1848,6 +1848,12 @@ def page_ai_top_picks():
     with c4:
         top_n = st.slider("Top Picks", 3, 15, 10, key="top_picks_top_n")
 
+    t1, t2 = st.columns([1, 3])
+    with t1:
+        data_mode = st.selectbox("Mode", ["Daily", "Intraday Fast"], index=0, key="top_picks_data_mode")
+    with t2:
+        intraday_interval = st.selectbox("Intraday Interval", ["5m", "15m", "30m", "60m"], index=2, key="top_picks_intraday_interval")
+
     include_news_merge = st.toggle(
         "Merge News Impact into Conviction Score",
         value=True,
@@ -1865,6 +1871,7 @@ def page_ai_top_picks():
 
         try:
             from ai_models.trend_predictor import TrendPredictor
+            from analysis.regime_detector import detect_regime
         except Exception as e:
             st.error(f"Could not load AI predictor: {e}")
             return
@@ -1887,7 +1894,10 @@ def page_ai_top_picks():
         
         def process_symbol(symbol: str):
             try:
-                df = load_stock_data_raw(symbol, period=period, exchange=exchange)
+                use_period = "1mo" if data_mode == "Intraday Fast" else period
+                use_interval = intraday_interval if data_mode == "Intraday Fast" else "1d"
+
+                df = load_stock_data_raw(symbol, period=use_period, exchange=exchange, interval=use_interval)
                 if df.empty or len(df) < 220:
                     return None, symbol
 
@@ -1903,6 +1913,9 @@ def page_ai_top_picks():
                 ai_conf = float(pred.get("confidence", 0.0))
                 ai_dir = 1.0 if ai_signal == "BULLISH" else -1.0 if ai_signal == "BEARISH" else 0.0
                 ai_score = ai_dir * ai_conf * 100.0
+                regime_info = detect_regime(df)
+                regime = regime_info.get("regime", "UNKNOWN")
+                regime_conf = float(regime_info.get("confidence", 0.0))
 
                 impact_score = 0.0
                 impact_label = "NA"
@@ -1912,6 +1925,13 @@ def page_ai_top_picks():
                     impact_label = str(news.get("overall_impact", "NEUTRAL"))
 
                 conviction = (0.75 * ai_score) + (0.25 * impact_score if include_news_merge else 0.0)
+                # Regime-aware damping: reduce confidence in high-volatility range.
+                if regime == "HIGH_VOLATILITY":
+                    conviction *= 0.85
+                elif regime == "RANGE_BOUND":
+                    conviction *= 0.92
+                else:
+                    conviction *= (0.95 + 0.05 * regime_conf)
                 action = "BUY" if conviction >= 15 else "SELL" if conviction <= -15 else "WATCH"
 
                 latest = df.iloc[-1]
@@ -1927,6 +1947,8 @@ def page_ai_top_picks():
                     "news_impact": round(impact_score, 1),
                     "impact_label": impact_label,
                     "conviction_score": round(conviction, 1),
+                    "regime": regime,
+                    "regime_conf": round(regime_conf * 100.0, 1),
                     "last_price": round(float(latest["close"]), 2),
                     "change_pct": round(change_pct, 2),
                     "model_acc": round(float(results.get("ensemble", {}).get("accuracy", 0.0) * 100.0), 1),
@@ -1969,17 +1991,17 @@ def page_ai_top_picks():
         tab1, tab2, tab3 = st.tabs(["Top Bullish", "Top Bearish", "All Ranked"])
         with tab1:
             st.dataframe(
-                bullish[["symbol", "action", "conviction_score", "ai_confidence", "news_impact", "last_price", "change_pct", "model_acc"]],
+                bullish[["symbol", "action", "conviction_score", "regime", "ai_confidence", "news_impact", "last_price", "change_pct", "model_acc"]],
                 width="stretch"
             )
         with tab2:
             st.dataframe(
-                bearish[["symbol", "action", "conviction_score", "ai_confidence", "news_impact", "last_price", "change_pct", "model_acc"]],
+                bearish[["symbol", "action", "conviction_score", "regime", "ai_confidence", "news_impact", "last_price", "change_pct", "model_acc"]],
                 width="stretch"
             )
         with tab3:
             st.dataframe(
-                out[["symbol", "action", "conviction_score", "ai_signal", "ai_confidence", "news_impact", "impact_label", "last_price", "change_pct", "model_acc"]],
+                out[["symbol", "action", "conviction_score", "regime", "regime_conf", "ai_signal", "ai_confidence", "news_impact", "impact_label", "last_price", "change_pct", "model_acc"]],
                 width="stretch"
             )
 
