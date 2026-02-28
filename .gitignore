@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.cache/
+scanner.log
+dashboard/_ui_extracted.py
+dashboard/app_before_ui_merge.py
+*.pkl
