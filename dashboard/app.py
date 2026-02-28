@@ -61,7 +61,7 @@ def inject_custom_css():
     st.markdown("""
     <style>
     /* ===== GLOBAL STYLES ===== */
-    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap');
     
     :root {
         --bg-primary: #fffdf7;
@@ -99,6 +99,11 @@ def inject_custom_css():
         background: var(--bg-primary) !important;
         color: var(--text-primary) !important;
         font-family: 'Poppins', -apple-system, sans-serif !important;
+    }
+
+    p, li, label, span, div[data-testid="stMarkdownContainer"] p {
+        line-height: 1.55 !important;
+        letter-spacing: 0.01em !important;
     }
     
     /* ===== HEADER AREA ===== */
@@ -492,7 +497,8 @@ def inject_custom_css():
     
     .main-title {
         font-size: 1.8rem;
-        font-weight: 800;
+        font-weight: 700;
+        font-family: 'Space Grotesk', 'Poppins', sans-serif;
         background: var(--gradient-primary);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
@@ -502,10 +508,10 @@ def inject_custom_css():
     }
     
     .main-subtitle {
-        font-size: 0.85rem;
+        font-size: 0.92rem;
         color: var(--text-muted);
         margin-top: 4px;
-        font-weight: 400;
+        font-weight: 500;
     }
     
     /* Alert animation */
@@ -727,7 +733,7 @@ def create_candlestick_chart(df, symbol="", height=500, show_volume=True):
         height=height,
         title=dict(
             text=f'{symbol}' if symbol else '',
-            font=dict(size=16, color='#e2e8f0'),
+            font=dict(size=16, color='#1f2937'),
             x=0.02,
         ),
         xaxis_rangeslider_visible=False,
@@ -828,7 +834,7 @@ def signal_card_html(symbol, signal, price, change_pct, strength, reasons, signa
     <div class="signal-card {signal_type}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div>
-                <span style="font-size:1.2rem;font-weight:700;color:#e2e8f0;">{symbol}</span>
+                <span style="font-size:1.2rem;font-weight:700;color:var(--text-primary);">{symbol}</span>
                 <span class="badge {badge_class}" style="margin-left:10px;">{signal.replace('_',' ')}</span>
             </div>
             <div style="text-align:right;">
@@ -871,12 +877,12 @@ def ai_prediction_gauge(confidence, prediction):
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=confidence * 100,
-        title=dict(text=f"AI: {prediction}", font=dict(size=16, color='#e2e8f0')),
+        title=dict(text=f"AI: {prediction}", font=dict(size=16, color='#1f2937')),
         number=dict(suffix="%", font=dict(size=28, color=color, family='JetBrains Mono')),
         gauge=dict(
             axis=dict(range=[0, 100], tickcolor='#334155', tickfont=dict(color='#64748b')),
             bar=dict(color=color),
-            bgcolor='#1a2332',
+            bgcolor='#fff8e8',
             borderwidth=0,
             steps=[
                 dict(range=[0, 30], color='rgba(239,68,68,0.1)'),
@@ -902,7 +908,7 @@ def create_heatmap(data, title=""):
         y=data.index,
         colorscale=[
             [0, RED],
-            [0.5, '#1a2332'],
+            [0.5, '#fff8e8'],
             [1, GREEN],
         ],
         text=data.round(2).values,
@@ -2307,7 +2313,7 @@ def page_heatmap():
             fig_tree = px.treemap(
                 tm_df, path=['symbol'], values='abs_return',
                 color='return_1d',
-                color_continuous_scale=[[0, RED], [0.5, '#1a2332'], [1, GREEN]],
+                color_continuous_scale=[[0, RED], [0.5, '#fff8e8'], [1, GREEN]],
                 color_continuous_midpoint=0,
                 title="Market Treemap (Today's Performance)",
             )
