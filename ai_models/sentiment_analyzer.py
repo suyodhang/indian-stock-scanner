@@ -9,6 +9,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
+from urllib.parse import quote_plus
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +291,7 @@ class SentimentAnalyzer:
         try:
             import feedparser
             
-            query = f"{symbol}+stock+india"
+            query = quote_plus(f"{symbol} stock india")
             url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
             
             feed = feedparser.parse(url)
