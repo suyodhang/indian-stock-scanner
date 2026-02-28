@@ -1110,6 +1110,7 @@ def render_sidebar():
                 "Scanner",
                 "Stock Analysis",
                 "AI Predictions",
+                "AI Top Picks",
                 "News & Sentiment",
                 "Market Heatmap",
                 "Watchlist",
@@ -1652,6 +1653,160 @@ def page_ai_predictions():
 
 
 # ============================================================
+# PAGE: AI TOP PICKS
+# ============================================================
+
+def page_ai_top_picks():
+    """Batch AI ranking with optional news-impact merge."""
+    st.markdown("""
+    <div class="main-header">
+        <div class="main-title">AI Top Picks</div>
+        <div class="main-subtitle">Batch AI ranking with conviction score</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    symbol_universes = load_ai_symbol_universes()
+    available_universes = [u for u in symbol_universes.keys() if u != "Custom Input"]
+
+    c1, c2, c3, c4 = st.columns([1.5, 1, 1, 1])
+    with c1:
+        universe_name = st.selectbox("Universe", available_universes, index=0, key="top_picks_universe")
+    with c2:
+        period = st.selectbox("Training Period", ["1y", "2y", "3y"], index=1, key="top_picks_period")
+    with c3:
+        max_symbols = st.slider("Symbols", 5, 40, 15, key="top_picks_max_symbols")
+    with c4:
+        top_n = st.slider("Top Picks", 3, 15, 10, key="top_picks_top_n")
+
+    include_news_merge = st.toggle(
+        "Merge News Impact into Conviction Score",
+        value=True,
+        help="Conviction score combines AI confidence and news impact score.",
+    )
+
+    exchange = "BSE" if universe_name.startswith("BSE") else "NSE"
+    symbols = symbol_universes.get(universe_name, [])[:max_symbols]
+    st.caption(f"Universe: {universe_name} | Exchange: {exchange} | Symbols Selected: {len(symbols)}")
+
+    if st.button("Run Batch AI Ranking", type="primary", width="stretch", key="btn_top_picks"):
+        if not symbols:
+            st.warning("No symbols available in selected universe.")
+            return
+
+        try:
+            from ai_models.trend_predictor import TrendPredictor
+        except Exception as e:
+            st.error(f"Could not load AI predictor: {e}")
+            return
+
+        analyzer = None
+        if include_news_merge:
+            try:
+                from ai_models.sentiment_analyzer import SentimentAnalyzer
+                analyzer = SentimentAnalyzer()
+            except Exception as e:
+                st.warning(f"News analyzer unavailable. Running AI-only ranking. Reason: {e}")
+                include_news_merge = False
+
+        rows = []
+        failed = []
+        progress = st.progress(0, text="Starting batch AI scan...")
+
+        for idx, symbol in enumerate(symbols, start=1):
+            progress.progress(int(idx * 100 / len(symbols)), text=f"Processing {symbol} ({idx}/{len(symbols)})")
+            try:
+                df = load_stock_data(symbol, period=period, exchange=exchange)
+                if df.empty or len(df) < 220:
+                    failed.append(symbol)
+                    continue
+
+                predictor = TrendPredictor()
+                X, y = predictor.prepare_features(df)
+                if len(X) < 120:
+                    failed.append(symbol)
+                    continue
+
+                results = predictor.train(X, y)
+                pred = predictor.predict(X)
+
+                ai_signal = str(pred.get("prediction", "NEUTRAL")).upper()
+                ai_conf = float(pred.get("confidence", 0.0))
+                ai_dir = 1.0 if ai_signal == "BULLISH" else -1.0 if ai_signal == "BEARISH" else 0.0
+                ai_score = ai_dir * ai_conf * 100.0
+
+                impact_score = 0.0
+                impact_label = "NA"
+                if include_news_merge and analyzer is not None:
+                    news = analyzer.get_stock_sentiment(symbol, days=7)
+                    impact_score = float(news.get("impact_score", 0.0))
+                    impact_label = str(news.get("overall_impact", "NEUTRAL"))
+
+                conviction = (0.75 * ai_score) + (0.25 * impact_score if include_news_merge else 0.0)
+                action = "BUY" if conviction >= 15 else "SELL" if conviction <= -15 else "WATCH"
+
+                latest = df.iloc[-1]
+                prev = df.iloc[-2] if len(df) > 1 else latest
+                change_pct = float((latest["close"] - prev["close"]) / max(prev["close"], 1e-9) * 100)
+
+                rows.append({
+                    "symbol": symbol,
+                    "action": action,
+                    "ai_signal": ai_signal,
+                    "ai_confidence": round(ai_conf * 100.0, 1),
+                    "ai_score": round(ai_score, 1),
+                    "news_impact": round(impact_score, 1),
+                    "impact_label": impact_label,
+                    "conviction_score": round(conviction, 1),
+                    "last_price": round(float(latest["close"]), 2),
+                    "change_pct": round(change_pct, 2),
+                    "model_acc": round(float(results.get("ensemble", {}).get("accuracy", 0.0) * 100.0), 1),
+                })
+            except Exception:
+                failed.append(symbol)
+
+        progress.empty()
+
+        if not rows:
+            st.warning("No valid results generated. Try smaller list or different period.")
+            return
+
+        out = pd.DataFrame(rows).sort_values("conviction_score", ascending=False).reset_index(drop=True)
+        bullish = out[out["conviction_score"] > 0].head(top_n)
+        bearish = out[out["conviction_score"] < 0].sort_values("conviction_score", ascending=True).head(top_n)
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Scanned", len(symbols))
+        m2.metric("Valid Results", len(out))
+        m3.metric("Strong Buy", int((out["action"] == "BUY").sum()))
+        m4.metric("Strong Sell", int((out["action"] == "SELL").sum()))
+
+        if failed:
+            st.caption(f"Skipped/failed symbols: {', '.join(failed[:12])}{' ...' if len(failed) > 12 else ''}")
+
+        tab1, tab2, tab3 = st.tabs(["Top Bullish", "Top Bearish", "All Ranked"])
+        with tab1:
+            st.dataframe(
+                bullish[["symbol", "action", "conviction_score", "ai_confidence", "news_impact", "last_price", "change_pct", "model_acc"]],
+                width="stretch"
+            )
+        with tab2:
+            st.dataframe(
+                bearish[["symbol", "action", "conviction_score", "ai_confidence", "news_impact", "last_price", "change_pct", "model_acc"]],
+                width="stretch"
+            )
+        with tab3:
+            st.dataframe(
+                out[["symbol", "action", "conviction_score", "ai_signal", "ai_confidence", "news_impact", "impact_label", "last_price", "change_pct", "model_acc"]],
+                width="stretch"
+            )
+
+        st.info(
+            "Conviction Score = 75% AI directional confidence + 25% News Impact. "
+            "Thresholds: BUY >= +15, SELL <= -15, else WATCH."
+        )
+
+
+# ============================================================
 # PAGE: NEWS & SENTIMENT
 # ============================================================
 
@@ -2096,6 +2251,8 @@ def main():
         page_stock_analysis()
     elif "AI Predictions" in page:
         page_ai_predictions()
+    elif "AI Top Picks" in page:
+        page_ai_top_picks()
     elif "News & Sentiment" in page:
         page_news_sentiment()
     elif "Heatmap" in page:
