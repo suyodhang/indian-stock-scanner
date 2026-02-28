@@ -989,6 +989,70 @@ def load_index_data():
         return {}
 
 
+@st.cache_data(ttl=900)
+def load_market_news_feed(bucket: str, days: int = 7, max_per_topic: int = 3) -> pd.DataFrame:
+    """Load multi-topic news feed with lightweight sentiment scoring."""
+    try:
+        from ai_models.sentiment_analyzer import SentimentAnalyzer
+
+        baskets = {
+            "NSE Stocks": [
+                "NIFTY 50", "NSE Bank", "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN"
+            ],
+            "BSE Stocks": [
+                "SENSEX", "BSE 100", "BSE Midcap", "ITC", "AXISBANK", "KOTAKBANK", "MARUTI", "LT"
+            ],
+            "Global & Commodities": [
+                "GIFT Nifty", "US stock market", "Dow Jones", "Nasdaq", "S&P 500",
+                "Gold price", "Silver price", "Crude oil", "US Federal Reserve"
+            ],
+            "India + Global Mix": [
+                "NIFTY 50", "SENSEX", "GIFT Nifty", "US stock market", "Gold price", "Silver price"
+            ],
+        }
+
+        topics = baskets.get(bucket, baskets["India + Global Mix"])
+        analyzer = SentimentAnalyzer()
+        rows = []
+        seen = set()
+
+        for topic in topics:
+            articles = analyzer.fetch_news(topic, days=days)[:max_per_topic]
+            for article in articles:
+                title = str(article.get("title", "")).strip()
+                url = str(article.get("url", "")).strip()
+                key = (title.lower(), url.lower())
+                if not title or key in seen:
+                    continue
+                seen.add(key)
+
+                text = f"{title}. {article.get('description', '')}"
+                s = analyzer.analyze_text(text)
+                sentiment_score = float(s.get("positive", 0.0) - s.get("negative", 0.0))
+                sentiment_label = str(s.get("sentiment", "neutral")).upper()
+
+                rows.append({
+                    "topic": topic,
+                    "title": title,
+                    "source": article.get("source", "Unknown"),
+                    "published_at": article.get("published_at", "N/A"),
+                    "url": url,
+                    "sentiment": sentiment_label,
+                    "score": sentiment_score,
+                    "confidence": float(s.get("confidence", 0.0)),
+                })
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows)
+        df.sort_values(by=["topic", "score"], ascending=[True, False], inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
 # ============================================================
 # SIDEBAR
 # ============================================================
@@ -1516,103 +1580,185 @@ def page_news_sentiment():
     st.markdown("""
     <div class="main-header">
         <div class="main-title">News & Sentiment</div>
-        <div class="main-subtitle">Track headline flow and sentiment for Indian stocks</div>
+        <div class="main-subtitle">Single-stock and market-wide headline sentiment</div>
     </div>
     """, unsafe_allow_html=True)
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        symbol = st.text_input("Symbol for News Analysis", value="RELIANCE")
-    with col2:
-        days = st.selectbox("Lookback Days", [3, 7, 14, 30], index=1)
+    tab_symbol, tab_market = st.tabs(["Single Symbol", "Market Feed"])
 
-    if st.button("Fetch News & Analyze", type="primary", width="stretch"):
-        with st.spinner("Fetching latest headlines and running sentiment analysis..."):
-            try:
-                from ai_models.sentiment_analyzer import SentimentAnalyzer
+    with tab_symbol:
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            symbol = st.text_input("Symbol for News Analysis", value="RELIANCE")
+        with col2:
+            days = st.selectbox("Lookback Days", [3, 7, 14, 30], index=1, key="news_days_symbol")
 
-                analyzer = SentimentAnalyzer()
-                result = analyzer.get_stock_sentiment(symbol.upper().strip(), days=days)
+        if st.button("Fetch Symbol News", type="primary", width="stretch", key="btn_symbol_news"):
+            with st.spinner("Fetching latest headlines and running sentiment analysis..."):
+                try:
+                    from ai_models.sentiment_analyzer import SentimentAnalyzer
 
-                if result.get('article_count', 0) == 0:
-                    st.warning("No news articles found for this symbol in selected period.")
-                    return
+                    analyzer = SentimentAnalyzer()
+                    result = analyzer.get_stock_sentiment(symbol.upper().strip(), days=days)
 
-                score = result.get('sentiment_score', 0.0)
-                overall = result.get('overall_sentiment', 'neutral').upper()
-                sentiment_color = GREEN if score > 0.1 else RED if score < -0.1 else YELLOW
+                    if result.get('article_count', 0) == 0:
+                        st.warning("No news articles found for this symbol in selected period.")
+                        return
 
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Articles", result.get('article_count', 0))
-                c2.metric("Sentiment", overall)
-                c3.metric("Score", f"{score:+.2f}")
-                c4.metric("Positive Ratio", f"{result.get('avg_positive', 0.0):.0%}")
+                    score = result.get('sentiment_score', 0.0)
+                    overall = result.get('overall_sentiment', 'neutral').upper()
 
-                # Sentiment composition chart
-                fig = go.Figure(data=[
-                    go.Bar(
-                        x=["Positive", "Neutral", "Negative"],
-                        y=[
-                            result.get('avg_positive', 0.0),
-                            result.get('avg_neutral', 0.0),
-                            result.get('avg_negative', 0.0),
-                        ],
-                        marker_color=[GREEN, YELLOW, RED],
-                        text=[
-                            f"{result.get('avg_positive', 0.0):.0%}",
-                            f"{result.get('avg_neutral', 0.0):.0%}",
-                            f"{result.get('avg_negative', 0.0):.0%}",
-                        ],
-                        textposition='auto',
-                        name='Sentiment Mix',
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Articles", result.get('article_count', 0))
+                    c2.metric("Sentiment", overall)
+                    c3.metric("Score", f"{score:+.2f}")
+                    c4.metric("Positive Ratio", f"{result.get('avg_positive', 0.0):.0%}")
+
+                    fig = go.Figure(data=[
+                        go.Bar(
+                            x=["Positive", "Neutral", "Negative"],
+                            y=[
+                                result.get('avg_positive', 0.0),
+                                result.get('avg_neutral', 0.0),
+                                result.get('avg_negative', 0.0),
+                            ],
+                            marker_color=[GREEN, YELLOW, RED],
+                            text=[
+                                f"{result.get('avg_positive', 0.0):.0%}",
+                                f"{result.get('avg_neutral', 0.0):.0%}",
+                                f"{result.get('avg_negative', 0.0):.0%}",
+                            ],
+                            textposition='auto',
+                            name='Sentiment Mix',
+                        )
+                    ])
+                    fig.update_layout(
+                        **CHART_THEME,
+                        title=f"{symbol.upper().strip()} News Sentiment Distribution",
+                        height=320,
+                        yaxis_title="Score",
                     )
-                ])
+                    st.plotly_chart(fig, width="stretch")
+
+                    st.markdown("### Top Headlines")
+                    for idx, article in enumerate(result.get('articles', [])[:12], start=1):
+                        s = article.get('sentiment', {})
+                        s_label = str(s.get('sentiment', 'neutral')).upper()
+                        s_conf = s.get('confidence', 0.0)
+                        s_color = GREEN if s_label == 'POSITIVE' else RED if s_label == 'NEGATIVE' else YELLOW
+
+                        title = article.get('title', 'Untitled')
+                        source = article.get('source', 'Unknown')
+                        published = article.get('published_at', 'N/A')
+                        url = article.get('url', '')
+
+                        st.markdown(
+                            f"""
+                            <div class="signal-card" style="border-left:4px solid {s_color};">
+                                <div style="font-weight:600;color:var(--text-primary);margin-bottom:6px;">
+                                    {idx}. {title}
+                                </div>
+                                <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.82rem;color:var(--text-secondary);">
+                                    <span><b>Source:</b> {source}</span>
+                                    <span><b>Sentiment:</b> <span style="color:{s_color};font-weight:600;">{s_label}</span></span>
+                                    <span><b>Confidence:</b> {s_conf:.0%}</span>
+                                    <span><b>Time:</b> {published}</span>
+                                </div>
+                                <div style="margin-top:6px;">
+                                    <a href="{url}" target="_blank" style="color:#b8860b;text-decoration:none;">Open Article</a>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                except Exception as e:
+                    st.error(f"News sentiment analysis failed: {e}")
+
+    with tab_market:
+        c1, c2, c3 = st.columns([2, 1, 1])
+        with c1:
+            bucket = st.selectbox(
+                "Feed Basket",
+                ["NSE Stocks", "BSE Stocks", "Global & Commodities", "India + Global Mix"],
+                index=3,
+            )
+        with c2:
+            market_days = st.selectbox("Lookback Days", [1, 3, 7, 14], index=2, key="news_days_market")
+        with c3:
+            per_topic = st.slider("Per Topic", 1, 6, 3)
+
+        if st.button("Fetch Market Feed", type="primary", width="stretch", key="btn_market_news"):
+            with st.spinner("Collecting NSE/BSE/global news and scoring sentiment..."):
+                feed_df = load_market_news_feed(bucket, days=market_days, max_per_topic=per_topic)
+
+            if feed_df.empty:
+                st.warning("No market headlines found for selected basket.")
+            else:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Headlines", len(feed_df))
+                c2.metric("Topics", feed_df['topic'].nunique())
+                c3.metric("Avg Score", f"{feed_df['score'].mean():+.2f}")
+                c4.metric("Positive %", f"{(feed_df['sentiment'].eq('POSITIVE').mean()):.0%}")
+
+                topic_summary = (
+                    feed_df.groupby('topic', as_index=False)
+                    .agg(avg_score=('score', 'mean'), headlines=('title', 'count'))
+                    .sort_values('avg_score', ascending=False)
+                )
+
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=topic_summary['avg_score'],
+                    y=topic_summary['topic'],
+                    orientation='h',
+                    text=[f"{v:+.2f}" for v in topic_summary['avg_score']],
+                    textposition='auto',
+                    marker_color=[
+                        GREEN if v > 0.1 else RED if v < -0.1 else YELLOW
+                        for v in topic_summary['avg_score']
+                    ],
+                    name="Topic Score",
+                ))
                 fig.update_layout(
                     **CHART_THEME,
-                    title=f"{symbol.upper().strip()} News Sentiment Distribution",
-                    height=320,
-                    yaxis_title="Score",
+                    title=f"{bucket} - Sentiment by Topic",
+                    height=340,
+                    xaxis_title="Avg Sentiment Score",
+                    yaxis_title="Topic",
                 )
                 st.plotly_chart(fig, width="stretch")
 
-                st.markdown("### Top Headlines")
-                for idx, article in enumerate(result.get('articles', [])[:12], start=1):
-                    s = article.get('sentiment', {})
-                    s_label = str(s.get('sentiment', 'neutral')).upper()
-                    s_conf = s.get('confidence', 0.0)
-                    s_color = GREEN if s_label == 'POSITIVE' else RED if s_label == 'NEGATIVE' else YELLOW
-
-                    title = article.get('title', 'Untitled')
-                    source = article.get('source', 'Unknown')
-                    published = article.get('published_at', 'N/A')
-                    url = article.get('url', '')
-
+                st.markdown("### Market Headlines")
+                for idx, row in feed_df.head(30).iterrows():
+                    s_color = GREEN if row['sentiment'] == 'POSITIVE' else RED if row['sentiment'] == 'NEGATIVE' else YELLOW
                     st.markdown(
                         f"""
                         <div class="signal-card" style="border-left:4px solid {s_color};">
+                            <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:4px;">
+                                {row['topic']}
+                            </div>
                             <div style="font-weight:600;color:var(--text-primary);margin-bottom:6px;">
-                                {idx}. {title}
+                                {idx + 1}. {row['title']}
                             </div>
                             <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.82rem;color:var(--text-secondary);">
-                                <span><b>Source:</b> {source}</span>
-                                <span><b>Sentiment:</b> <span style="color:{s_color};font-weight:600;">{s_label}</span></span>
-                                <span><b>Confidence:</b> {s_conf:.0%}</span>
-                                <span><b>Time:</b> {published}</span>
+                                <span><b>Source:</b> {row['source']}</span>
+                                <span><b>Sentiment:</b> <span style="color:{s_color};font-weight:600;">{row['sentiment']}</span></span>
+                                <span><b>Score:</b> {row['score']:+.2f}</span>
+                                <span><b>Confidence:</b> {row['confidence']:.0%}</span>
+                                <span><b>Time:</b> {row['published_at']}</span>
                             </div>
                             <div style="margin-top:6px;">
-                                <a href="{url}" target="_blank" style="color:#b8860b;text-decoration:none;">Open Article</a>
+                                <a href="{row['url']}" target="_blank" style="color:#b8860b;text-decoration:none;">Open Article</a>
                             </div>
                         </div>
                         """,
                         unsafe_allow_html=True,
                     )
 
-                st.info(
-                    "News sentiment is probabilistic and can be noisy. "
-                    "Use it with technical/fundamental confirmation."
-                )
-            except Exception as e:
-                st.error(f"News sentiment analysis failed: {e}")
+        st.info(
+            "Market feed basket includes NSE/BSE stocks and global themes like Gold, Silver, "
+            "GIFT Nifty, and US market indices."
+        )
 
 
 # ============================================================
