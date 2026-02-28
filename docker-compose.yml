@@ -1,0 +1,47 @@
+﻿version: '3.8'
+
+services:
+  scanner:
+    build: .
+    container_name: stock-scanner
+    command: python main.py --mode scheduled
+    volumes:
+      - ./:/app
+      - ./models:/app/models
+      - ./logs:/app/logs
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - NEWS_API_KEY=${NEWS_API_KEY}
+    restart: unless-stopped
+  
+  dashboard:
+    build: .
+    container_name: stock-dashboard
+    command: streamlit run dashboard/app.py --server.port 8501 --theme.base dark
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+  
+  # Optional: PostgreSQL for data storage
+  # postgres:
+  #   image: postgres:15
+  #   environment:
+  #     POSTGRES_DB: stock_scanner
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: password
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  
+  # Optional: Redis for caching
+  # redis:
+  #   image: redis:7
+  #   ports:
+  #     - "6379:6379"
+
+# volumes:
+#   pgdata:
