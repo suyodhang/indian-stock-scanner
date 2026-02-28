@@ -1217,6 +1217,123 @@ def render_disclaimer():
     )
 
 
+def init_alert_state():
+    """Initialize alert-related session state."""
+    defaults = {
+        "auto_alerts_enabled": False,
+        "alert_channel_telegram": True,
+        "alert_channel_email": False,
+        "alert_buy_threshold": 20.0,
+        "alert_sell_threshold": -20.0,
+        "alert_cooldown_min": 30,
+        "alert_max_per_run": 5,
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
+        "email_smtp_server": "smtp.gmail.com",
+        "email_smtp_port": 587,
+        "email_sender": "",
+        "email_password": "",
+        "email_recipients": "",
+        "alert_last_sent": {},
+        "alert_history": [],
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+def _can_send_alert(alert_key: str) -> bool:
+    """Cooldown gate for duplicate alerts."""
+    cooldown = int(st.session_state.get("alert_cooldown_min", 30))
+    last_sent = st.session_state.get("alert_last_sent", {})
+    now = datetime.now()
+    prev = last_sent.get(alert_key)
+    if not prev:
+        return True
+    try:
+        prev_dt = datetime.fromisoformat(prev)
+        return (now - prev_dt).total_seconds() >= cooldown * 60
+    except Exception:
+        return True
+
+
+def _mark_alert_sent(alert_key: str, payload: Dict):
+    """Store sent alert metadata."""
+    now = datetime.now().isoformat()
+    last_sent = st.session_state.get("alert_last_sent", {})
+    last_sent[alert_key] = now
+    st.session_state["alert_last_sent"] = last_sent
+
+    history = st.session_state.get("alert_history", [])
+    history.insert(0, {
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        **payload,
+    })
+    st.session_state["alert_history"] = history[:200]
+
+
+def send_auto_alert(symbol: str, action: str, conviction_score: float, ai_confidence: float, news_impact: float, exchange: str) -> Dict:
+    """Send auto alert via configured channels. Returns delivery summary."""
+    sent_channels = []
+    msg_text = (
+        f"AI Auto Alert\n"
+        f"Symbol: {symbol} ({exchange})\n"
+        f"Action: {action}\n"
+        f"Conviction Score: {conviction_score:+.1f}\n"
+        f"AI Confidence: {ai_confidence:.1f}%\n"
+        f"News Impact: {news_impact:+.1f}\n"
+        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    chart_links = get_chart_links(symbol, exchange=exchange)
+    msg_with_links = f"{msg_text}\nChart: {chart_links['tradingview']}\nQuote: {chart_links['yahoo']}"
+
+    if st.session_state.get("alert_channel_telegram", True):
+        token = st.session_state.get("telegram_bot_token", "").strip()
+        chat_id = st.session_state.get("telegram_chat_id", "").strip()
+        if token and chat_id:
+            try:
+                from alerts.telegram_bot import TelegramBot
+                bot = TelegramBot(token, chat_id)
+                if bot.send_message(msg_with_links):
+                    sent_channels.append("telegram")
+            except Exception:
+                pass
+
+    if st.session_state.get("alert_channel_email", False):
+        sender = st.session_state.get("email_sender", "").strip()
+        pwd = st.session_state.get("email_password", "").strip()
+        recipients_raw = st.session_state.get("email_recipients", "").strip()
+        recipients = [r.strip() for r in recipients_raw.split(",") if r.strip()]
+        if sender and pwd and recipients:
+            try:
+                from alerts.email_alerts import EmailAlerts
+                mailer = EmailAlerts(
+                    smtp_server=st.session_state.get("email_smtp_server", "smtp.gmail.com"),
+                    smtp_port=int(st.session_state.get("email_smtp_port", 587)),
+                    sender_email=sender,
+                    sender_password=pwd,
+                    recipients=recipients,
+                )
+                html = (
+                    "<html><body>"
+                    f"<h3>AI Auto Alert: {symbol} ({exchange})</h3>"
+                    f"<p><b>Action:</b> {action}</p>"
+                    f"<p><b>Conviction Score:</b> {conviction_score:+.1f}</p>"
+                    f"<p><b>AI Confidence:</b> {ai_confidence:.1f}%</p>"
+                    f"<p><b>News Impact:</b> {news_impact:+.1f}</p>"
+                    f"<p><a href='{chart_links['tradingview']}'>TradingView Chart</a> | "
+                    f"<a href='{chart_links['yahoo']}'>Yahoo Quote</a></p>"
+                    f"<p>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>"
+                    "</body></html>"
+                )
+                if mailer.send_email(subject=f"AI Alert: {symbol} {action}", body_html=html):
+                    sent_channels.append("email")
+            except Exception:
+                pass
+
+    return {"sent_channels": sent_channels}
+
+
 # ============================================================
 # PAGE: DASHBOARD
 # ============================================================
@@ -1856,6 +1973,51 @@ def page_ai_top_picks():
                 width="stretch"
             )
 
+        # Auto alerts trigger
+        if st.session_state.get("auto_alerts_enabled", False):
+            buy_th = float(st.session_state.get("alert_buy_threshold", 20.0))
+            sell_th = float(st.session_state.get("alert_sell_threshold", -20.0))
+            max_alerts = int(st.session_state.get("alert_max_per_run", 5))
+
+            candidates = out[
+                (out["conviction_score"] >= buy_th) |
+                (out["conviction_score"] <= sell_th)
+            ].copy()
+            candidates = candidates.sort_values("conviction_score", ascending=False)
+
+            sent_count = 0
+            for _, row in candidates.iterrows():
+                if sent_count >= max_alerts:
+                    break
+                alert_key = f"{exchange}:{row['symbol']}:{row['action']}"
+                if not _can_send_alert(alert_key):
+                    continue
+                delivery = send_auto_alert(
+                    symbol=str(row["symbol"]),
+                    action=str(row["action"]),
+                    conviction_score=float(row["conviction_score"]),
+                    ai_confidence=float(row["ai_confidence"]),
+                    news_impact=float(row["news_impact"]),
+                    exchange=exchange,
+                )
+                if delivery.get("sent_channels"):
+                    _mark_alert_sent(
+                        alert_key,
+                        {
+                            "symbol": row["symbol"],
+                            "exchange": exchange,
+                            "action": row["action"],
+                            "conviction_score": float(row["conviction_score"]),
+                            "channels": ",".join(delivery["sent_channels"]),
+                        },
+                    )
+                    sent_count += 1
+
+            if sent_count > 0:
+                st.success(f"Auto Alerts sent: {sent_count}")
+            else:
+                st.caption("Auto Alerts enabled, but no new threshold-cross signals passed cooldown/channel checks.")
+
         st.markdown("#### Quick Chart Links")
         link_symbol = st.selectbox("Select Symbol for Chart", out["symbol"].tolist(), index=0, key="top_picks_link_symbol")
         link_urls = get_chart_links(link_symbol, exchange)
@@ -2278,11 +2440,105 @@ def page_settings():
     
     with tab2:
         st.markdown("#### Alert Settings")
-        st.toggle("Telegram Alerts", value=False)
-        st.text_input("Telegram Bot Token", type="password")
-        st.text_input("Telegram Chat ID")
-        st.toggle("Email Alerts", value=False)
-        st.text_input("Email Address")
+        st.session_state["auto_alerts_enabled"] = st.toggle(
+            "Enable Auto Alerts (AI Top Picks)",
+            value=st.session_state.get("auto_alerts_enabled", False),
+        )
+
+        c1, c2, c3 = st.columns(3)
+        st.session_state["alert_buy_threshold"] = c1.number_input(
+            "BUY Threshold",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("alert_buy_threshold", 20.0)),
+            step=1.0,
+        )
+        st.session_state["alert_sell_threshold"] = c2.number_input(
+            "SELL Threshold",
+            min_value=-100.0,
+            max_value=0.0,
+            value=float(st.session_state.get("alert_sell_threshold", -20.0)),
+            step=1.0,
+        )
+        st.session_state["alert_cooldown_min"] = int(c3.number_input(
+            "Cooldown (min)",
+            min_value=1,
+            max_value=1440,
+            value=int(st.session_state.get("alert_cooldown_min", 30)),
+            step=1,
+        ))
+
+        st.session_state["alert_max_per_run"] = int(
+            st.slider(
+                "Max Alerts Per Batch Run",
+                min_value=1,
+                max_value=20,
+                value=int(st.session_state.get("alert_max_per_run", 5)),
+            )
+        )
+
+        st.markdown("##### Channels")
+        cc1, cc2 = st.columns(2)
+        st.session_state["alert_channel_telegram"] = cc1.toggle(
+            "Telegram",
+            value=st.session_state.get("alert_channel_telegram", True),
+        )
+        st.session_state["alert_channel_email"] = cc2.toggle(
+            "Email",
+            value=st.session_state.get("alert_channel_email", False),
+        )
+
+        with st.expander("Telegram Configuration"):
+            st.session_state["telegram_bot_token"] = st.text_input(
+                "Telegram Bot Token",
+                value=st.session_state.get("telegram_bot_token", ""),
+                type="password",
+            )
+            st.session_state["telegram_chat_id"] = st.text_input(
+                "Telegram Chat ID",
+                value=st.session_state.get("telegram_chat_id", ""),
+            )
+
+        with st.expander("Email Configuration"):
+            ec1, ec2 = st.columns(2)
+            st.session_state["email_smtp_server"] = ec1.text_input(
+                "SMTP Server",
+                value=st.session_state.get("email_smtp_server", "smtp.gmail.com"),
+            )
+            st.session_state["email_smtp_port"] = int(ec2.number_input(
+                "SMTP Port",
+                min_value=1,
+                max_value=65535,
+                value=int(st.session_state.get("email_smtp_port", 587)),
+            ))
+            st.session_state["email_sender"] = st.text_input(
+                "Sender Email",
+                value=st.session_state.get("email_sender", ""),
+            )
+            st.session_state["email_password"] = st.text_input(
+                "Sender Password / App Password",
+                value=st.session_state.get("email_password", ""),
+                type="password",
+            )
+            st.session_state["email_recipients"] = st.text_input(
+                "Recipients (comma separated)",
+                value=st.session_state.get("email_recipients", ""),
+            )
+
+        st.markdown("##### Recent Alert History")
+        history = st.session_state.get("alert_history", [])
+        if history:
+            st.dataframe(pd.DataFrame(history[:50]), width="stretch")
+        else:
+            st.caption("No alerts sent yet.")
+
+        c_reset1, c_reset2 = st.columns(2)
+        if c_reset1.button("Clear Alert History"):
+            st.session_state["alert_history"] = []
+            st.success("Alert history cleared.")
+        if c_reset2.button("Reset Cooldown Memory"):
+            st.session_state["alert_last_sent"] = {}
+            st.success("Cooldown memory reset.")
     
     with tab3:
         st.markdown("#### Database")
@@ -2301,6 +2557,7 @@ def page_settings():
 def main():
     """Main application entry point"""
     inject_custom_css()
+    init_alert_state()
     page = render_sidebar()
     
     # Route to correct page
