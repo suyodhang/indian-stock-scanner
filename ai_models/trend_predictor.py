@@ -30,6 +30,8 @@ import warnings
 
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
+_warned_xgb_missing = False
+_warned_lgb_missing = False
 
 
 class TrendPredictor:
@@ -213,7 +215,10 @@ class TrendPredictor:
                 verbosity=0
             )
         else:
-            logger.warning("xgboost not installed; skipping xgboost model.")
+            global _warned_xgb_missing
+            if not _warned_xgb_missing:
+                logger.warning("xgboost not installed; skipping xgboost model.")
+                _warned_xgb_missing = True
 
         if lgb is not None:
             self.models['lightgbm'] = lgb.LGBMClassifier(
@@ -226,7 +231,10 @@ class TrendPredictor:
                 verbose=-1
             )
         else:
-            logger.warning("lightgbm not installed; skipping lightgbm model.")
+            global _warned_lgb_missing
+            if not _warned_lgb_missing:
+                logger.warning("lightgbm not installed; skipping lightgbm model.")
+                _warned_lgb_missing = True
         
         results = {}
         

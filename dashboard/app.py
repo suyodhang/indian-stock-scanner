@@ -940,20 +940,26 @@ def get_chart_links(symbol: str, exchange: str = "NSE") -> Dict[str, str]:
 def load_stock_data(symbol, period="6mo", exchange="NSE"):
     """Load and cache stock data"""
     try:
-        from data_collection.yahoo_fetcher import YahooFinanceFetcher
-        from analysis.technical_indicators import TechnicalIndicators
-        
-        fetcher = YahooFinanceFetcher(exchange=exchange)
-        df = fetcher.get_historical_data(symbol, period=period, exchange=exchange)
-        
-        if not df.empty:
-            ti = TechnicalIndicators()
-            df = ti.calculate_all(df)
-        
+        df = load_stock_data_raw(symbol, period=period, exchange=exchange)
         return df
     except Exception as e:
         st.error(f"Error loading {symbol}: {e}")
         return pd.DataFrame()
+
+
+def load_stock_data_raw(symbol, period="6mo", exchange="NSE"):
+    """Non-Streamlit helper safe for background threads."""
+    from data_collection.yahoo_fetcher import YahooFinanceFetcher
+    from analysis.technical_indicators import TechnicalIndicators
+
+    fetcher = YahooFinanceFetcher(exchange=exchange)
+    df = fetcher.get_historical_data(symbol, period=period, exchange=exchange)
+
+    if not df.empty:
+        ti = TechnicalIndicators()
+        df = ti.calculate_all(df)
+
+    return df
 
 
 @st.cache_data(ttl=3600)
@@ -1864,9 +1870,13 @@ def page_ai_top_picks():
             return
 
         analyzer = None
+        news_cache = {}
         if include_news_merge:
             try:
                 analyzer = get_sentiment_analyzer()
+                # Prefetch news in main thread to avoid Streamlit context warnings in worker threads.
+                for sym in symbols:
+                    news_cache[sym] = load_stock_sentiment(sym, days=5, max_articles=8)
             except Exception as e:
                 st.warning(f"News analyzer unavailable. Running AI-only ranking. Reason: {e}")
                 include_news_merge = False
@@ -1877,7 +1887,7 @@ def page_ai_top_picks():
         
         def process_symbol(symbol: str):
             try:
-                df = load_stock_data(symbol, period=period, exchange=exchange)
+                df = load_stock_data_raw(symbol, period=period, exchange=exchange)
                 if df.empty or len(df) < 220:
                     return None, symbol
 
@@ -1897,7 +1907,7 @@ def page_ai_top_picks():
                 impact_score = 0.0
                 impact_label = "NA"
                 if include_news_merge and analyzer is not None:
-                    news = load_stock_sentiment(symbol, days=5, max_articles=8)
+                    news = news_cache.get(symbol, {})
                     impact_score = float(news.get("impact_score", 0.0))
                     impact_label = str(news.get("overall_impact", "NEUTRAL"))
 
