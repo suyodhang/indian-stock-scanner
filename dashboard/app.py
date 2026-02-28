@@ -530,6 +530,52 @@ def inject_custom_css():
     .js-plotly-plot .plotly .main-svg {
         background: transparent !important;
     }
+
+    /* ===== MOBILE TUNING ===== */
+    @media (max-width: 768px) {
+        :root {
+            --bg-primary: #f7f1df;
+            --bg-secondary: #f2e7c7;
+            --bg-card: #fff5dd;
+            --bg-card-hover: #fcedc6;
+            --bg-input: #fff3d2;
+            --border-color: #dfc27a;
+            --border-light: #cfa94a;
+            --text-primary: #1b2430;
+            --text-secondary: #4b5563;
+        }
+
+        .stApp {
+            background: linear-gradient(180deg, #f9f3e3 0%, #f3e6c2 100%) !important;
+        }
+
+        [data-testid="stSidebar"] {
+            background: #efe2bd !important;
+        }
+
+        [data-testid="stMetric"] {
+            background: #fff3d7 !important;
+            border-color: #d9b868 !important;
+        }
+
+        .ticker-item,
+        .signal-card,
+        .stat-item {
+            background: #fff2d2 !important;
+            border-color: #d9b868 !important;
+        }
+
+        [data-testid="stDataFrame"] > div,
+        .stTabs [data-baseweb="tab-list"] {
+            background: #f8edd0 !important;
+        }
+
+        .js-plotly-plot .plotly .main-svg,
+        .js-plotly-plot .plotly .bg {
+            background: #fff5de !important;
+            fill: #fff5de !important;
+        }
+    }
     
     </style>
     """, unsafe_allow_html=True)
