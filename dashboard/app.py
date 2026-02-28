@@ -33,6 +33,7 @@ import os
 import warnings
 import textwrap
 from typing import Dict, List
+from urllib.parse import quote
 
 warnings.filterwarnings('ignore')
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -918,6 +919,18 @@ def create_heatmap(data, title=""):
     return fig
 
 
+def get_chart_links(symbol: str, exchange: str = "NSE") -> Dict[str, str]:
+    """Build external chart links for a symbol."""
+    sym = str(symbol or "").upper().strip()
+    ex = "BSE" if str(exchange).upper().startswith("BSE") else "NSE"
+    ticker = f"{sym}.BO" if ex == "BSE" else f"{sym}.NS"
+    tv_symbol = quote(f"{ex}:{sym}", safe="")
+    return {
+        "tradingview": f"https://www.tradingview.com/chart/?symbol={tv_symbol}",
+        "yahoo": f"https://finance.yahoo.com/quote/{quote(ticker, safe='')}",
+    }
+
+
 # ============================================================
 # DATA LOADING (with caching)
 # ============================================================
@@ -1446,6 +1459,11 @@ def page_stock_analysis():
     
     if symbol:
         symbol = symbol.upper().strip()
+        chart_links = get_chart_links(symbol, selected_exchange)
+        st.markdown(
+            f"[Open TradingView Chart]({chart_links['tradingview']}) | "
+            f"[Open Yahoo Finance Chart]({chart_links['yahoo']})"
+        )
         
         with st.spinner(f"Loading {symbol} data..."):
             df = load_stock_data(symbol, period, exchange=selected_exchange)
@@ -1581,6 +1599,11 @@ def page_ai_predictions():
 
     ai_exchange = "BSE" if universe_name.startswith("BSE") else "NSE"
     st.caption(f"Selected Universe: {universe_name} | Exchange Mode: {ai_exchange}")
+    ai_links = get_chart_links(ai_symbol, ai_exchange)
+    st.markdown(
+        f"[Open TradingView Chart]({ai_links['tradingview']}) | "
+        f"[Open Yahoo Finance Chart]({ai_links['yahoo']})"
+    )
     
     if st.button("Run AI Analysis", type="primary", width="stretch"):
         with st.spinner("Training AI models..."):
@@ -1799,6 +1822,14 @@ def page_ai_top_picks():
                 out[["symbol", "action", "conviction_score", "ai_signal", "ai_confidence", "news_impact", "impact_label", "last_price", "change_pct", "model_acc"]],
                 width="stretch"
             )
+
+        st.markdown("#### Quick Chart Links")
+        link_symbol = st.selectbox("Select Symbol for Chart", out["symbol"].tolist(), index=0, key="top_picks_link_symbol")
+        link_urls = get_chart_links(link_symbol, exchange)
+        st.markdown(
+            f"[Open TradingView Chart]({link_urls['tradingview']}) | "
+            f"[Open Yahoo Finance Chart]({link_urls['yahoo']})"
+        )
 
         st.info(
             "Conviction Score = 75% AI directional confidence + 25% News Impact. "
