@@ -1052,6 +1052,18 @@ def render_sidebar():
         if st.button("Refresh Data", width="stretch"):
             st.cache_data.clear()
             st.rerun()
+
+        st.markdown(
+            textwrap.dedent("""
+            <div style="margin-top:12px;padding:10px;background:#fff3cd;border:1px solid #e2c676;border-radius:8px;">
+                <div style="color:#7a5c00;font-size:0.74rem;line-height:1.35;">
+                    <strong>Disclaimer:</strong> This app is for educational and analysis purposes only.
+                    It is not financial advice and does not provide buy/sell/trade recommendations.
+                </div>
+            </div>
+            """),
+            unsafe_allow_html=True,
+        )
         
         st.markdown("""
         <div style="text-align:center;color:var(--text-muted);font-size:0.7rem;padding:20px 0;">
@@ -1060,6 +1072,14 @@ def render_sidebar():
         """, unsafe_allow_html=True)
     
     return page
+
+
+def render_disclaimer():
+    """Render global legal disclaimer"""
+    st.caption(
+        "Disclaimer: This platform is intended only for market analysis and education. "
+        "It is not investment advice. Do your own research and consult a SEBI-registered advisor before trading."
+    )
 
 
 # ============================================================
@@ -1743,6 +1763,9 @@ def main():
         page_portfolio()
     elif "Settings" in page:
         page_settings()
+
+    st.markdown("---")
+    render_disclaimer()
 
 
 if __name__ == "__main__":
