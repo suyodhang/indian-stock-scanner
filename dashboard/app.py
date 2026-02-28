@@ -712,11 +712,14 @@ def create_rsi_chart(df, height=200):
         fig.add_hrect(y0=70, y1=100, fillcolor="rgba(239,68,68,0.05)", line_width=0)
         fig.add_hrect(y0=0, y1=30, fillcolor="rgba(16,185,129,0.05)", line_width=0)
     
+    layout_theme = dict(CHART_THEME)
+    base_yaxis = dict(layout_theme.pop('yaxis', {}))
+    base_yaxis['range'] = [0, 100]
     fig.update_layout(
-        **CHART_THEME,
+        **layout_theme,
         height=height,
         title=dict(text='RSI (14)', font=dict(size=13)),
-        yaxis=dict(range=[0, 100], **CHART_THEME['yaxis']),
+        yaxis=base_yaxis,
     )
     
     return fig
