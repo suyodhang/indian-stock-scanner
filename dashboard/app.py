@@ -1014,6 +1014,7 @@ def render_sidebar():
                 "Scanner",
                 "Stock Analysis",
                 "AI Predictions",
+                "News & Sentiment",
                 "Market Heatmap",
                 "Watchlist",
                 "Portfolio",
@@ -1507,6 +1508,114 @@ def page_ai_predictions():
 
 
 # ============================================================
+# PAGE: NEWS & SENTIMENT
+# ============================================================
+
+def page_news_sentiment():
+    """News and sentiment analysis page"""
+    st.markdown("""
+    <div class="main-header">
+        <div class="main-title">News & Sentiment</div>
+        <div class="main-subtitle">Track headline flow and sentiment for Indian stocks</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        symbol = st.text_input("Symbol for News Analysis", value="RELIANCE")
+    with col2:
+        days = st.selectbox("Lookback Days", [3, 7, 14, 30], index=1)
+
+    if st.button("Fetch News & Analyze", type="primary", width="stretch"):
+        with st.spinner("Fetching latest headlines and running sentiment analysis..."):
+            try:
+                from ai_models.sentiment_analyzer import SentimentAnalyzer
+
+                analyzer = SentimentAnalyzer()
+                result = analyzer.get_stock_sentiment(symbol.upper().strip(), days=days)
+
+                if result.get('article_count', 0) == 0:
+                    st.warning("No news articles found for this symbol in selected period.")
+                    return
+
+                score = result.get('sentiment_score', 0.0)
+                overall = result.get('overall_sentiment', 'neutral').upper()
+                sentiment_color = GREEN if score > 0.1 else RED if score < -0.1 else YELLOW
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Articles", result.get('article_count', 0))
+                c2.metric("Sentiment", overall)
+                c3.metric("Score", f"{score:+.2f}")
+                c4.metric("Positive Ratio", f"{result.get('avg_positive', 0.0):.0%}")
+
+                # Sentiment composition chart
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=["Positive", "Neutral", "Negative"],
+                        y=[
+                            result.get('avg_positive', 0.0),
+                            result.get('avg_neutral', 0.0),
+                            result.get('avg_negative', 0.0),
+                        ],
+                        marker_color=[GREEN, YELLOW, RED],
+                        text=[
+                            f"{result.get('avg_positive', 0.0):.0%}",
+                            f"{result.get('avg_neutral', 0.0):.0%}",
+                            f"{result.get('avg_negative', 0.0):.0%}",
+                        ],
+                        textposition='auto',
+                        name='Sentiment Mix',
+                    )
+                ])
+                fig.update_layout(
+                    **CHART_THEME,
+                    title=f"{symbol.upper().strip()} News Sentiment Distribution",
+                    height=320,
+                    yaxis_title="Score",
+                )
+                st.plotly_chart(fig, width="stretch")
+
+                st.markdown("### Top Headlines")
+                for idx, article in enumerate(result.get('articles', [])[:12], start=1):
+                    s = article.get('sentiment', {})
+                    s_label = str(s.get('sentiment', 'neutral')).upper()
+                    s_conf = s.get('confidence', 0.0)
+                    s_color = GREEN if s_label == 'POSITIVE' else RED if s_label == 'NEGATIVE' else YELLOW
+
+                    title = article.get('title', 'Untitled')
+                    source = article.get('source', 'Unknown')
+                    published = article.get('published_at', 'N/A')
+                    url = article.get('url', '')
+
+                    st.markdown(
+                        f"""
+                        <div class="signal-card" style="border-left:4px solid {s_color};">
+                            <div style="font-weight:600;color:var(--text-primary);margin-bottom:6px;">
+                                {idx}. {title}
+                            </div>
+                            <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.82rem;color:var(--text-secondary);">
+                                <span><b>Source:</b> {source}</span>
+                                <span><b>Sentiment:</b> <span style="color:{s_color};font-weight:600;">{s_label}</span></span>
+                                <span><b>Confidence:</b> {s_conf:.0%}</span>
+                                <span><b>Time:</b> {published}</span>
+                            </div>
+                            <div style="margin-top:6px;">
+                                <a href="{url}" target="_blank" style="color:#b8860b;text-decoration:none;">Open Article</a>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                st.info(
+                    "News sentiment is probabilistic and can be noisy. "
+                    "Use it with technical/fundamental confirmation."
+                )
+            except Exception as e:
+                st.error(f"News sentiment analysis failed: {e}")
+
+
+# ============================================================
 # PAGE: MARKET HEATMAP
 # ============================================================
 
@@ -1755,6 +1864,8 @@ def main():
         page_stock_analysis()
     elif "AI Predictions" in page:
         page_ai_predictions()
+    elif "News & Sentiment" in page:
+        page_news_sentiment()
     elif "Heatmap" in page:
         page_heatmap()
     elif "Watchlist" in page:
