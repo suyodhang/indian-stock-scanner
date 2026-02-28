@@ -15,8 +15,14 @@ from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     classification_report
 )
-import xgboost as xgb
-import lightgbm as lgb
+try:
+    import xgboost as xgb
+except Exception:
+    xgb = None
+try:
+    import lightgbm as lgb
+except Exception:
+    lgb = None
 from sklearn.neural_network import MLPClassifier
 import joblib
 import logging
@@ -181,7 +187,16 @@ class TrendPredictor:
                 random_state=42,
                 n_jobs=-1
             ),
-            'xgboost': xgb.XGBClassifier(
+            'gradient_boosting': GradientBoostingClassifier(
+                n_estimators=150,
+                max_depth=5,
+                learning_rate=0.1,
+                random_state=42
+            ),
+        }
+        
+        if xgb is not None:
+            self.models['xgboost'] = xgb.XGBClassifier(
                 n_estimators=200,
                 max_depth=6,
                 learning_rate=0.1,
@@ -190,8 +205,12 @@ class TrendPredictor:
                 random_state=42,
                 eval_metric='logloss',
                 verbosity=0
-            ),
-            'lightgbm': lgb.LGBMClassifier(
+            )
+        else:
+            logger.warning("xgboost not installed; skipping xgboost model.")
+
+        if lgb is not None:
+            self.models['lightgbm'] = lgb.LGBMClassifier(
                 n_estimators=200,
                 max_depth=6,
                 learning_rate=0.1,
@@ -199,14 +218,9 @@ class TrendPredictor:
                 colsample_bytree=0.8,
                 random_state=42,
                 verbose=-1
-            ),
-            'gradient_boosting': GradientBoostingClassifier(
-                n_estimators=150,
-                max_depth=5,
-                learning_rate=0.1,
-                random_state=42
-            ),
-        }
+            )
+        else:
+            logger.warning("lightgbm not installed; skipping lightgbm model.")
         
         results = {}
         
@@ -254,9 +268,16 @@ class TrendPredictor:
         
         logger.info(f"  Ensemble: Acc={ensemble_accuracy:.4f}, F1={ensemble_f1:.4f}")
         
-        # Feature importance (from XGBoost)
+        # Feature importance from best available tree model.
+        if 'xgboost' in self.models and hasattr(self.models['xgboost'], 'feature_importances_'):
+            importance_values = self.models['xgboost'].feature_importances_
+        elif 'random_forest' in self.models and hasattr(self.models['random_forest'], 'feature_importances_'):
+            importance_values = self.models['random_forest'].feature_importances_
+        else:
+            importance_values = np.zeros(len(X.columns))
+
         self.feature_importance = pd.Series(
-            self.models['xgboost'].feature_importances_,
+            importance_values,
             index=X.columns
         ).sort_values(ascending=False)
         
