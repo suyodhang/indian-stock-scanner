@@ -149,7 +149,8 @@ class TrendPredictor:
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        test_size: float = 0.2
+        test_size: float = 0.2,
+        quick_mode: bool = False
     ) -> Dict:
         """
         Train ensemble model
@@ -178,9 +179,14 @@ class TrendPredictor:
         self.feature_columns = list(X.columns)
         
         # Define models
+        rf_estimators = 80 if quick_mode else 200
+        gb_estimators = 70 if quick_mode else 150
+        xgb_estimators = 80 if quick_mode else 200
+        lgb_estimators = 80 if quick_mode else 200
+
         self.models = {
             'random_forest': RandomForestClassifier(
-                n_estimators=200,
+                n_estimators=rf_estimators,
                 max_depth=10,
                 min_samples_split=10,
                 min_samples_leaf=5,
@@ -188,7 +194,7 @@ class TrendPredictor:
                 n_jobs=-1
             ),
             'gradient_boosting': GradientBoostingClassifier(
-                n_estimators=150,
+                n_estimators=gb_estimators,
                 max_depth=5,
                 learning_rate=0.1,
                 random_state=42
@@ -197,7 +203,7 @@ class TrendPredictor:
         
         if xgb is not None:
             self.models['xgboost'] = xgb.XGBClassifier(
-                n_estimators=200,
+                n_estimators=xgb_estimators,
                 max_depth=6,
                 learning_rate=0.1,
                 subsample=0.8,
@@ -211,7 +217,7 @@ class TrendPredictor:
 
         if lgb is not None:
             self.models['lightgbm'] = lgb.LGBMClassifier(
-                n_estimators=200,
+                n_estimators=lgb_estimators,
                 max_depth=6,
                 learning_rate=0.1,
                 subsample=0.8,

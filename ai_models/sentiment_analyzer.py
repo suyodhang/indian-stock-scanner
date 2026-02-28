@@ -255,7 +255,7 @@ class SentimentAnalyzer:
             'confidence': max(pos_score, neg_score, neu_score)
         }
     
-    def fetch_news(self, symbol: str, days: int = 7) -> List[Dict]:
+    def fetch_news(self, symbol: str, days: int = 7, max_articles: int = 15) -> List[Dict]:
         """Fetch news articles for a stock"""
         articles = []
         
@@ -295,7 +295,7 @@ class SentimentAnalyzer:
             
             feed = feedparser.parse(url)
             
-            for entry in feed.entries[:15]:
+            for entry in feed.entries[:max_articles]:
                 articles.append({
                     'title': entry.get('title', ''),
                     'description': entry.get('summary', ''),
@@ -306,16 +306,16 @@ class SentimentAnalyzer:
         except Exception as e:
             logger.error(f"Error fetching Google News: {e}")
         
-        return articles
+        return articles[:max_articles]
     
-    def get_stock_sentiment(self, symbol: str, days: int = 7) -> Dict:
+    def get_stock_sentiment(self, symbol: str, days: int = 7, max_articles: int = 15) -> Dict:
         """
         Get overall sentiment for a stock
         
         Returns:
             Aggregated sentiment scores and individual article sentiments
         """
-        articles = self.fetch_news(symbol, days)
+        articles = self.fetch_news(symbol, days, max_articles=max_articles)
         
         if not articles:
             return {

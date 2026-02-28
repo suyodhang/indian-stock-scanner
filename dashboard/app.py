@@ -34,6 +34,7 @@ import warnings
 import textwrap
 from typing import Dict, List
 from urllib.parse import quote
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings('ignore')
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1030,7 +1031,7 @@ def load_index_data():
 def load_market_news_feed(bucket: str, days: int = 7, max_per_topic: int = 3) -> pd.DataFrame:
     """Load multi-topic news feed with lightweight sentiment scoring."""
     try:
-        from ai_models.sentiment_analyzer import SentimentAnalyzer
+        analyzer = get_sentiment_analyzer()
 
         baskets = {
             "NSE Stocks": [
@@ -1049,12 +1050,11 @@ def load_market_news_feed(bucket: str, days: int = 7, max_per_topic: int = 3) ->
         }
 
         topics = baskets.get(bucket, baskets["India + Global Mix"])
-        analyzer = SentimentAnalyzer()
         rows = []
         seen = set()
 
         for topic in topics:
-            articles = analyzer.fetch_news(topic, days=days)[:max_per_topic]
+            articles = analyzer.fetch_news(topic, days=days, max_articles=max_per_topic)
             for article in articles:
                 title = str(article.get("title", "")).strip()
                 url = str(article.get("url", "")).strip()
@@ -1096,6 +1096,30 @@ def load_market_news_feed(bucket: str, days: int = 7, max_per_topic: int = 3) ->
         return df
     except Exception:
         return pd.DataFrame()
+
+
+@st.cache_resource
+def get_sentiment_analyzer():
+    """Reuse heavy analyzer/model objects across reruns."""
+    from ai_models.sentiment_analyzer import SentimentAnalyzer
+    return SentimentAnalyzer()
+
+
+@st.cache_data(ttl=900)
+def load_stock_sentiment(symbol: str, days: int = 7, max_articles: int = 10) -> Dict:
+    """Cached stock-level sentiment/impact for dashboard workflows."""
+    try:
+        analyzer = get_sentiment_analyzer()
+        return analyzer.get_stock_sentiment(symbol.upper().strip(), days=days, max_articles=max_articles)
+    except Exception:
+        return {
+            "symbol": symbol,
+            "overall_sentiment": "neutral",
+            "impact_score": 0.0,
+            "overall_impact": "NEUTRAL",
+            "article_count": 0,
+            "articles": [],
+        }
 
 
 # ============================================================
@@ -1725,8 +1749,7 @@ def page_ai_top_picks():
         analyzer = None
         if include_news_merge:
             try:
-                from ai_models.sentiment_analyzer import SentimentAnalyzer
-                analyzer = SentimentAnalyzer()
+                analyzer = get_sentiment_analyzer()
             except Exception as e:
                 st.warning(f"News analyzer unavailable. Running AI-only ranking. Reason: {e}")
                 include_news_merge = False
@@ -1734,22 +1757,19 @@ def page_ai_top_picks():
         rows = []
         failed = []
         progress = st.progress(0, text="Starting batch AI scan...")
-
-        for idx, symbol in enumerate(symbols, start=1):
-            progress.progress(int(idx * 100 / len(symbols)), text=f"Processing {symbol} ({idx}/{len(symbols)})")
+        
+        def process_symbol(symbol: str):
             try:
                 df = load_stock_data(symbol, period=period, exchange=exchange)
                 if df.empty or len(df) < 220:
-                    failed.append(symbol)
-                    continue
+                    return None, symbol
 
                 predictor = TrendPredictor()
                 X, y = predictor.prepare_features(df)
                 if len(X) < 120:
-                    failed.append(symbol)
-                    continue
+                    return None, symbol
 
-                results = predictor.train(X, y)
+                results = predictor.train(X, y, quick_mode=True)
                 pred = predictor.predict(X)
 
                 ai_signal = str(pred.get("prediction", "NEUTRAL")).upper()
@@ -1760,7 +1780,7 @@ def page_ai_top_picks():
                 impact_score = 0.0
                 impact_label = "NA"
                 if include_news_merge and analyzer is not None:
-                    news = analyzer.get_stock_sentiment(symbol, days=7)
+                    news = load_stock_sentiment(symbol, days=5, max_articles=8)
                     impact_score = float(news.get("impact_score", 0.0))
                     impact_label = str(news.get("overall_impact", "NEUTRAL"))
 
@@ -1771,7 +1791,7 @@ def page_ai_top_picks():
                 prev = df.iloc[-2] if len(df) > 1 else latest
                 change_pct = float((latest["close"] - prev["close"]) / max(prev["close"], 1e-9) * 100)
 
-                rows.append({
+                return {
                     "symbol": symbol,
                     "action": action,
                     "ai_signal": ai_signal,
@@ -1783,9 +1803,22 @@ def page_ai_top_picks():
                     "last_price": round(float(latest["close"]), 2),
                     "change_pct": round(change_pct, 2),
                     "model_acc": round(float(results.get("ensemble", {}).get("accuracy", 0.0) * 100.0), 1),
-                })
+                }, None
             except Exception:
-                failed.append(symbol)
+                return None, symbol
+
+        max_workers = min(4, len(symbols))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_symbol, sym): sym for sym in symbols}
+            done = 0
+            for fut in as_completed(futures):
+                done += 1
+                progress.progress(int(done * 100 / len(symbols)), text=f"Processed {done}/{len(symbols)}")
+                row, failed_symbol = fut.result()
+                if row:
+                    rows.append(row)
+                if failed_symbol:
+                    failed.append(failed_symbol)
 
         progress.empty()
 
@@ -1862,10 +1895,7 @@ def page_news_sentiment():
         if st.button("Fetch Symbol News", type="primary", width="stretch", key="btn_symbol_news"):
             with st.spinner("Fetching latest headlines and running sentiment analysis..."):
                 try:
-                    from ai_models.sentiment_analyzer import SentimentAnalyzer
-
-                    analyzer = SentimentAnalyzer()
-                    result = analyzer.get_stock_sentiment(symbol.upper().strip(), days=days)
+                    result = load_stock_sentiment(symbol.upper().strip(), days=days, max_articles=12)
 
                     if result.get('article_count', 0) == 0:
                         st.warning("No news articles found for this symbol in selected period.")
