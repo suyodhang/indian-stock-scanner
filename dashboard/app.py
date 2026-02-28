@@ -1410,17 +1410,44 @@ def page_stock_analysis():
     </div>
     """, unsafe_allow_html=True)
     
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        symbol = st.text_input("Enter Stock Symbol", value="RELIANCE", placeholder="e.g., RELIANCE, TCS, INFY")
-    with col2:
+    symbol_universes = load_ai_symbol_universes()
+
+    c1, c2, c3 = st.columns([1.4, 2.2, 1])
+    with c1:
+        universe_name = st.selectbox(
+            "Select List",
+            list(symbol_universes.keys()),
+            index=0,
+            key="stock_analysis_universe",
+        )
+    with c2:
+        if universe_name == "Custom Input":
+            symbol = st.text_input(
+                "Enter Stock Symbol",
+                value="RELIANCE",
+                placeholder="e.g., RELIANCE, TCS, INFY",
+                key="stock_analysis_custom_symbol",
+            )
+        else:
+            options = symbol_universes.get(universe_name, ["RELIANCE"])
+            default_idx = options.index("RELIANCE") if "RELIANCE" in options else 0
+            symbol = st.selectbox(
+                "Choose Symbol",
+                options,
+                index=default_idx,
+                key="stock_analysis_symbol_picker",
+            )
+    with c3:
         period = st.selectbox("Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
+
+    selected_exchange = "BSE" if universe_name.startswith("BSE") else "NSE"
+    st.caption(f"Selected Universe: {universe_name} | Exchange Mode: {selected_exchange}")
     
     if symbol:
         symbol = symbol.upper().strip()
         
         with st.spinner(f"Loading {symbol} data..."):
-            df = load_stock_data(symbol, period)
+            df = load_stock_data(symbol, period, exchange=selected_exchange)
         
         if df.empty:
             st.error(f"No data found for {symbol}. Check the symbol name.")
@@ -1494,8 +1521,8 @@ def page_stock_analysis():
         with tab_fundamentals:
             try:
                 from data_collection.yahoo_fetcher import YahooFinanceFetcher
-                fetcher = YahooFinanceFetcher()
-                fund = fetcher.get_fundamentals(symbol)
+                fetcher = YahooFinanceFetcher(exchange=selected_exchange)
+                fund = fetcher.get_fundamentals(symbol, exchange=selected_exchange)
                 
                 if fund:
                     c1, c2, c3, c4 = st.columns(4)
